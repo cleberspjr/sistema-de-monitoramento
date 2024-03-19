@@ -1,9 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[1]:
-
-
 import matplotlib.pyplot as plt
 import numpy as np
 import json
@@ -18,80 +12,88 @@ from pathlib import Path
 import time
 import threading
 
+def get_all_thermal_zones():
+    thermal_zones = []
+    for folder in os.listdir('/sys/class/thermal/'):
+        if folder.startswith('thermal_zone'):
+            thermal_zones.append(os.path.join('/sys/class/thermal/', folder))
+    return thermal_zones
 
-# In[24]:
+def get_all_temperatures(thermal_zones):
+    temperatures = []
+    for zone_path in thermal_zones:
+        temperature = get_temperature(zone_path)
+        temperatures.append(temperature)
+    return temperatures
 
+def get_temperature(zone_path):
+    with open(os.path.join(zone_path, 'temp'), 'r') as file:
+        temperature = file.read().strip()
+    return int(temperature) / 1000
 
-#save only 1 record per termal_zone
-def thermal_zone():
-    t_zone = [os.path.join(thermal, m.group(0)) for m in [re.search('thermal_zone[0-9]+', d) for d in os.listdir(thermal)] if m] 
-    #t_zone = [filename for filename in os.listdir(thermal) if filename.startswith("thermal_zone")]
-    return t_zone
+def save_thermal_temperature(temporary_file, permanent_file, intervalo, duracao):
+    thermal_zones = get_all_thermal_zones()
+    tempo_total_execucao = duracao * 60  # Convertendo minutos para segundos
+    inicio_execucao = time.time()
 
-def value(valor):
-    val = (subprocess.check_output(['cat', valor]))
-    return val
+    # Verifica se o arquivo permanente já existe
+    existe_arquivo_permanente = os.path.exists(permanent_file)
 
-def thermal_temperature(zona):
-    zona_temp = ([int(value(os.path.join(p, 'temp'))) for p in zona])
+    with open(temporary_file, 'a') as q_temp:
+        if not existe_arquivo_permanente:  # Se o arquivo permanente não existir
+            label = "day;time;" + ";".join(zone.split('/')[-1] for zone in thermal_zones)
+            q_temp.write(label + '\n')
 
-    return zona_temp
+        while time.time() - inicio_execucao < tempo_total_execucao:
+            now = datetime.now().strftime("%Y-%m-%d;%H:%M:%S")  # Modificado para separar a data e a hora
+            record = now.split(';')[0]  # Pegando apenas a data
+            record += ';' + now.split(';')[1]  # Pegando apenas a hora
 
-#save only 1 record per termal_zone
-def save_thermal_temperature(zona, file):
-    q = open(file, 'w')
-    zona_temp = ([int(value(os.path.join(p, 'temp'))) for p in zona])
-    
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")   
-    label = ""
-    label = str("day")+";"+str("time")
-    record = ""
-    record = str(now).split(" ")[0]+";"+str(now).split(" ")[1]
-    i=0
-    for p in zona: 
-        label += ";"+str(p.split("/")[-1])
-        record +=";"+str(zona_temp[i])
-        i+=1        
-    record +=str('\n')
-    q.write(str(label)+"\n")
-    q.write(record)    
-    q.close()
+            temperatures = get_all_temperatures(thermal_zones)
+            for temperature in temperatures:
+                record += ';' + str(temperature)
 
-def save_thermal_temperature(zona, file, intervalo, duracao):
-    tempo_inicial = time.time()
+            record += '\n'
+            q_temp.write(record)
+            time.sleep(intervalo * 60)
 
-    while True:
-        q = open(file, 'a')
-        zona_temp = ([int(value(os.path.join(p, 'temp'))) for p in zona])    
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")   
-        label = ""
-        label = str("day")+";"+str("time")
-        record = ""
-        record = str(now).split(" ")[0]+";"+str(now).split(" ")[1]
-        i=0
-        for p in zona: 
-            label += ";"+str(p.split("/")[-1])
-            record +=";"+str(zona_temp[i])
-            i+=1        
-        record +=str('\n')
-        q.write(str(label)+"\n")
-        q.write(record)    
-        q.close()
+    # Copia o conteúdo do arquivo temporário para o arquivo permanente
+    with open(temporary_file, 'r') as temp_file, open(permanent_file, 'a+') as perm_file:
+        perm_file.write(temp_file.read())
 
-        time.sleep(intervalo)
+    # Apaga os dados do arquivo temporário
+    with open(temporary_file, 'w'):
+        pass
 
-        tempo_atual = time.time()
-        if tempo_atual - tempo_inicial >= duracao:
-            print("Condição de parada atingida. Encerrando a coleta de dados.")
-            break
-                
-zona = ['/sys/class/thermal/thermal_zone0', '/sys/class/thermal/thermal_zone1']
-file = 'temperaturas.csv'
-coletar_dados_thermal_zones(zona, file, intervalo=10, duracao=60)
+    print("Coleta de temperaturas finalizadas.")
 
-# to do: implementar condicao de parada
-    # condicao de parada: setar o intervalo (segundos entre uma coleta e outra) e a duração
-# to do: verificar se eh facil incluir uma opcao de encerrar o programa
+# Exemplo de uso
+temporary_file = 'temperaturas_temporarias.csv'
+permanent_file = 'historico_permanente_coletas_temperaturas.csv'
+save_thermal_temperature(temporary_file, permanent_file, 1, 2)  # Coleta temperatura de todas as zonas térmicas a cada 1 minuto por 5 minutos
+
+def load_temperature_data():
+    file_path = "historico_permanente_coletas_temperaturas.csv"
+    return pd.read_csv(file_path, delimiter=';')
+
+def plot_temperature_graph(dataframe, day):
+    df_day = dataframe[dataframe['day'] == day]
+
+    plt.figure(figsize=(10, 6))
+
+    for column in df_day.columns[2:]:
+        plt.plot(df_day['time'], df_day[column], label=column)
+
+    plt.title(f"Temperatures for {day}")
+    plt.xlabel("Time")
+    plt.ylabel("Temperature (°C)")
+
+    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+
+    plt.xticks(rotation=45, ha='right')
+
+    plt.tight_layout()
+    plt.show()
 
 def save_info_proc_file(name_file ='info_proc.txt'):
     informacoes = {}
@@ -112,32 +114,6 @@ def save_info_proc_file(name_file ='info_proc.txt'):
             file.write(f'{chave}: {valor}\n')
 
     print(f'Informações do processador salvas em {name_file}')
-
-# Exemplo de uso
-save_info_proc_file()
-
-def save_thermal_temperature_por_segundo(zona, file, interval):
-        q = open(file, 'a')
-        count = 1
-        while (True):
-            save_thermal_temperature(zona, file)
-            print("Records saved:", count)
-            count += 1
-            time.sleep(30)
-        # to do
-        # if count x interval == duration sai do programa
-        
-    
-        print(zona_temp)
-#funcao nova
-
-def save_processor_info():
-   # p = open(file, 'w')
-    #cpu_file = '/proc/cpuinfo'
-    
-    with open('/proc/cpuinfo', 'r') as cpu_info_file:
-        cpu_info = cpu_info_file.read()
-    print(cpu_info)    
 
 
 def print_several_temps_all_zones(file):
@@ -165,25 +141,14 @@ def all_zones_in_a_dictionary(zones_dict, df):
         zones_dict[str(zone_name)] = temp_list_2
     return zones_dict
 
-
-# In[3]:
-
-
-thermal = '/sys/class/thermal/'
-
 def main():    
     output_file_unico = "temp_database.csv"
     output_file_varios = "temp_database_all.csv" 
     output_file_varios_teste = "temp_database_all.csv" 
     output_processor_info = "processor_info.csv"
-    #Especifica a zona termal que se quer medir
-    zona = thermal_zone()    
-    #print(zona)
-    #Salva as temperaturas de cada zona (1 unica vez)
-    #save_thermal_temperature(zona, output_file_unico)
-    
-    # No futuro esta funcao vai ser chamada por 1 thread isolada    
-    
+    #Especifica a zona termal que se quer medir    
+  
+''' 
     # Salvar as informacoes do processador
     thread1 = threading.Thread(target=save_processor_info, args=())
     thread1.start()
@@ -197,41 +162,7 @@ def main():
     print("master doing thing 1")
     print("master doing thing 2")
     print("master doing thing 3")
-    
-    #save_thermal_temperature_por_segundo(zona, output_file_varios_teste,10)    # exemplo - save_thermal_temperature_por_segundo(zona, output_file_unico,10)
-    
-#     Printa grafico de linhas que exibe 1 temperatura por zona (arquivo output_file_unico)
-#     chamada da funcao aqui
-#     ex. print_single_temp(zona, output_file_unico)
-#    print_single_temp(zona, output_file_unico)
-
-#     # Printa grafico de linhas que exibe 10 temperaturas para cada zona termal (de 1 em 1)
-#     # no intervalo de tempo especificado (usar o arquivo output_file_varios e printar os 10 ultimos minutos)
-#     # chamada da funcao aqui
-#     # ex. print_several_temps(output_file_unico, interval=10)
-    
-   # print_several_temps_all_zones(output_file_varios)
+'''   
+  
     
     
-    
-if __name__ == "__main__":
-    main()
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
-
-
-# In[ ]:
-
-
-
-
